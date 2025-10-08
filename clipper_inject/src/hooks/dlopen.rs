@@ -19,7 +19,7 @@ type Dlopen = extern "C" fn(fname: *const c_char, flags: c_int) -> *mut c_void;
 static DLOPEN: LibItem<Dlopen> = LibItem::new_no_module("dlopen");
 
 extern "C" fn dlopen_detour(fname: *const c_char, flags: c_int) -> *mut c_void {
-    let r = (DLOPEN.orig.get().unwrap())(fname, flags);
+    let r = DLOPEN(fname, flags);
 
     tracing::debug!(file = ?unsafe { CStr::from_ptr(fname) }, "dlopen");
 

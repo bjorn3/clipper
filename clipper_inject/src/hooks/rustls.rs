@@ -26,8 +26,6 @@ use crate::{hooks::find_demangled_symbol, log_target::LOG_TARGET};
 
 use super::{applicability, ApplicabilityContext, Hooks};
 
-use std::marker::FnPtr;
-
 pub struct RustlsHooks {}
 
 const WILL_LOG_SYM: &'static str =
@@ -91,16 +89,14 @@ impl Hooks for RustlsHooks {
         hook_service
             .raw_hook(
                 NativePointer(log_addr as *mut c_void),
-                NativePointer((MyShirtWhichSaysNoKeyLog::log as LogTy).addr() as *mut c_void),
+                NativePointer(MyShirtWhichSaysNoKeyLog::log as LogTy as *mut c_void),
             )
             .unwrap();
 
         hook_service
             .raw_hook(
                 NativePointer(will_log_addr as *mut c_void),
-                NativePointer(
-                    (MyShirtWhichSaysNoKeyLog::will_log as WillLogTy).addr() as *mut c_void
-                ),
+                NativePointer(MyShirtWhichSaysNoKeyLog::will_log as WillLogTy as *mut c_void),
             )
             .unwrap();
 
