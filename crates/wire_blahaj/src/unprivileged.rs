@@ -9,7 +9,7 @@
 //! and then taking a handle to the TAP device inside the net namespace and
 //! executing the capture in the host namespace.
 //!
-//! The unptivileged part is achieved by giving the guest process fewer
+//! The unprivileged part is achieved by giving the guest process fewer
 //! privileges, rather than giving ourselves more.
 //!
 //! Inspired by: <https://github.com/rootless-containers/slirp4netns/blob/master/main.c#L223>
