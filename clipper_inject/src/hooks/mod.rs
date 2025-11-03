@@ -18,7 +18,7 @@ mod rustls;
 use std::{
     collections::HashSet,
     fmt::Write,
-    marker::FnPtr,
+    marker::PhantomData,
     mem, ptr,
     sync::{LazyLock, Mutex, OnceLock},
 };
@@ -27,24 +27,31 @@ use frida_gum::{
     interceptor::Interceptor, Gum, Module, ModuleDetailsOwned, NativePointer, SymbolDetails,
 };
 use lazy_static::lazy_static;
-use libc::c_void;
 use regex::Regex;
 
 pub static GUM: LazyLock<Gum> = LazyLock::new(|| unsafe { Gum::obtain() });
 pub static HOOK_SERVICE: OnceLock<Mutex<HookService<'static>>> = OnceLock::new();
 
-pub struct LibItem<TFun: FnPtr> {
+pub struct LibItem<TFun> {
     module_name: Option<&'static str>,
     fun_name: &'static str,
-    orig: OnceLock<TFun>,
+    orig: OnceLock<NativePointer>,
+    _marker: PhantomData<TFun>,
 }
 
-impl<TFun: FnPtr> LibItem<TFun> {
+// SAFETY: All fields except for orig field implement Sync. The orig field
+// would implement Sync if NativePointer were to implement Sync. NativePointer
+// is merely a wrapper around a pointer, which is fine to access from multiple
+// threads.
+unsafe impl<TFun: Sync> Sync for LibItem<TFun> {}
+
+impl<TFun> LibItem<TFun> {
     pub const fn new(module_name: &'static str, fun_name: &'static str) -> LibItem<TFun> {
         LibItem {
             module_name: Some(module_name),
             fun_name,
             orig: OnceLock::new(),
+            _marker: PhantomData,
         }
     }
     pub const fn new_no_module(fun_name: &'static str) -> LibItem<TFun> {
@@ -52,14 +59,15 @@ impl<TFun: FnPtr> LibItem<TFun> {
             module_name: None,
             fun_name,
             orig: OnceLock::new(),
+            _marker: PhantomData,
         }
     }
 }
 
-impl<TFun: FnPtr> std::ops::Deref for LibItem<TFun> {
+impl<TFun: Copy> std::ops::Deref for LibItem<TFun> {
     type Target = TFun;
     fn deref(&self) -> &Self::Target {
-        self.orig.get().expect("Orig missing")
+        unsafe { transmute_ref_same_size(self.orig.get().expect("Orig missing")) }
     }
 }
 
@@ -94,6 +102,12 @@ unsafe fn transmute_same_size<T: Copy, U>(val: T) -> U {
     val2
 }
 
+unsafe fn transmute_ref_same_size<T: Copy, U: Copy>(val: &T) -> &U {
+    assert_eq!(mem::size_of::<T>(), mem::size_of::<U>());
+    let val2: &U = std::mem::transmute(&val);
+    val2
+}
+
 impl<'a> HookService<'a> {
     pub unsafe fn new() -> HookService<'static> {
         HookService {
@@ -104,14 +118,10 @@ impl<'a> HookService<'a> {
 
     /// Finds an export and puts it into the LibItem provided without applying
     /// a hook.
-    pub unsafe fn find_export<TFun: FnPtr>(
-        &mut self,
-        item: &LibItem<TFun>,
-    ) -> Result<(), HookError> {
+    pub unsafe fn find_export<TFun>(&mut self, item: &LibItem<TFun>) -> Result<(), HookError> {
         let export = Module::find_export_by_name(item.module_name, item.fun_name)
             .ok_or(HookError::CouldNotFindExport)?;
 
-        let export: TFun = transmute_same_size(export);
         let _ = item.orig.set(export);
 
         Ok(())
@@ -119,7 +129,7 @@ impl<'a> HookService<'a> {
 
     /// Finds an export, hooks it to the provided function, then puts it into
     /// the LibItem provided.
-    pub unsafe fn hook_export<TFun: FnPtr>(
+    pub unsafe fn hook_export<TFun: Copy>(
         &mut self,
         hook: &LibItem<TFun>,
         ptr: TFun,
@@ -127,14 +137,12 @@ impl<'a> HookService<'a> {
         let export = Module::find_export_by_name(hook.module_name, hook.fun_name)
             .ok_or(HookError::CouldNotFindExport)?;
 
-        tracing::debug!("hook {:?} -> {:?}", export.0, ptr.addr());
-        let orig = self.interceptor.replace(
-            export,
-            NativePointer(ptr.addr() as *mut c_void),
-            NativePointer(ptr::null_mut()),
-        )?;
+        let ptr: NativePointer = transmute_same_size(ptr);
 
-        let orig: TFun = transmute_same_size(orig);
+        tracing::debug!("hook {:?} -> {:?}", export.0, ptr.0);
+        let orig = self
+            .interceptor
+            .replace(export, ptr, NativePointer(ptr::null_mut()))?;
 
         let _ = hook.orig.set(orig);
 
